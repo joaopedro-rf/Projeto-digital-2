@@ -1,0 +1,167 @@
+#include "msp430g2553.h"
+#include "ad.h"
+#include "lcd.h"
+#include "timerPWM.h"
+#include "timer.h"
+#include "uart.h"
+
+#define SECO 0
+#define UMIDO 1
+#define MOLHADO 2
+#define ATENCAO 3
+#define STATUS 4
+
+unsigned int estado = 0;
+
+unsigned int valorad;
+unsigned long int aux;
+
+unsigned int valorad1;
+unsigned long int aux1;
+
+unsigned long int aux2;
+unsigned int media_tensao;
+
+unsigned int periodo;
+unsigned int Ton;
+
+extern unsigned int cont_100ms;
+extern unsigned int segundo;
+
+void main (void)
+{
+	WDTCTL=WDTHOLD+WDTPW;
+	P1REN |= BIT0;
+	P1OUT |= BIT0;
+
+	InitLCD();
+
+	ConfigAD(BIT3+BIT4);
+	periodo= 20000;
+	ConfigPWM (periodo);
+
+	ConfigTimer0(50000,2);
+	StartTimer0();
+
+	ConfigUART(9600);
+
+	_BIS_SR(GIE);
+
+	P1IES |= BIT6; // TRANSICAO SUBIDA
+	P1IFG &= ~BIT6; // LIMPA PEDIDO INTERRUPCAO
+	P1IE |= BIT6; // HABILITA INTERRUP«√O UART
+
+	while(1){
+
+		valorad = LeAD(INCH_3);
+		valorad1 = LeAD(INCH_4);
+		aux = (unsigned long int) valorad;
+		aux = (aux*3300)/1023;
+		aux1 = (unsigned long int) valorad1;
+		aux1 = (aux1*3300)/1023;
+
+		aux2 = (aux+aux1)/2;
+		media_tensao = (unsigned int) aux2;
+
+
+		switch(estado){
+		case SECO:
+			Ton = 2000;
+			AtualizaTonPWM (Ton);
+			LCDPrintXYStr(1,1,"SECO            ");
+			LCDPrintXYStr(1,2,"<25% umidade");
+			if(media_tensao > 825 & media_tensao < 2475)
+			{
+				estado = UMIDO;
+			}
+			if((P1IN & BIT0 ) == 0 )
+			{
+				estado = ATENCAO;
+			}
+
+			break;
+		case UMIDO:
+			Ton = 1300;
+			AtualizaTonPWM (Ton);
+			LCDPrintXYStr(1,1,"UMIDO           ");
+			LCDPrintXYStr(1,2,"<75% umidade");
+			if(media_tensao > 0 & media_tensao <825)
+			{
+				estado = SECO;
+			}
+			if(media_tensao >= 2475)
+			{
+				estado = MOLHADO;
+			}
+			if((P1IN & BIT0 ) == 0 )
+			{
+				estado = ATENCAO;
+			}
+
+			break;
+		case MOLHADO:
+			Ton = 1000;
+			AtualizaTonPWM (Ton);
+			LCDPrintXYStr(1,1,"MOLHADO         ");
+			LCDPrintXYStr(1,2,">75% umidade");
+			if(media_tensao > 825 & media_tensao < 2475)
+			{
+				estado = UMIDO;
+			}
+			if((P1IN & BIT0 ) == 0 )
+			{
+				estado = ATENCAO;
+			}
+
+			break;
+		case ATENCAO:
+			Ton = 1000;
+			AtualizaTonPWM (Ton);
+			LCDPrintXYStr(1,1,"ATENCAO         ");
+			LCDPrintXYStr(1,2,"valvula OFF     ");
+
+			if((P1IN & BIT0 ) == 0 )
+			{
+				estado = ATENCAO;
+			}
+			else estado = SECO;
+
+			break;
+		case STATUS:
+
+			if((P1IN & BIT0 ) == 0 )
+			{
+				estado = ATENCAO;
+			}
+			break;
+
+		}
+
+	}
+}
+
+
+#pragma vector=TIMER1_A0_VECTOR
+__interrupt void timer (void){
+
+	TA1CCTL0&=~CCIFG;
+	cont_100ms++;
+	if(segundo%100==0)
+			{
+				switch(estado){
+					case SECO:
+						UARTSend("estado - seco, umidade <25% ");
+						break;
+					case UMIDO:
+						UARTSend("estado - umido, umidade <75% ");
+						break;
+					case MOLHADO:
+						UARTSend("estado - molhado, umidade >75% ");
+						break;
+				}
+
+			}
+	_BIS_SR(GIE);
+	P1OUT &= ~(BIT2);
+	P1IFG &= ~BIT2;
+}
